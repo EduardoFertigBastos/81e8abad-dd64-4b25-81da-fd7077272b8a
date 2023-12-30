@@ -67,6 +67,17 @@ export class PredictedProcessesManager {
    * ```
    */
   public async runAll(signal?: AbortSignal): Promise<void> {
-    // TODO: Implement this.
+    if (signal?.aborted) {
+      throw new DOMException('Signal already aborted', 'AbortError');
+    }
+  
+    try {
+      const promises = this._processes.map((process) => process.run(signal));
+
+      await Promise.all(promises);
+    } catch (error) {
+      // If any process encounters an error or is aborted, throw an error
+      throw error;
+    }
   }
 }

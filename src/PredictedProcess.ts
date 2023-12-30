@@ -1,12 +1,42 @@
-import type { ChildProcess } from 'child_process';
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'child_process';
+
+const EXIT_CODE = 0;
+
+interface handleAbortedSignalTriggeredDuringExecutionProps {
+  signal?: AbortSignal;
+  abortHandler: (event: any) => void;
+}
 
 export class PredictedProcess {
   private _childProcess: ChildProcess | null = null;
+  private memoizedCache: { [key: string]: PredictedProcess } = {};
 
   public constructor(
     public readonly id: number,
     public readonly command: string,
   ) {}
+
+  private handleAbortedSignal(): Promise<void> {
+    return Promise.reject(
+      new DOMException('Signal already aborted!', 'AbortError')
+    );
+  }
+
+  private handleAbortedSignalTriggeredDuringExecution({ 
+    signal, 
+    abortHandler
+  }: handleAbortedSignalTriggeredDuringExecutionProps): void {
+    setTimeout(() => {
+      signal?.removeEventListener('abort', abortHandler);
+    }, 5000);
+
+    signal?.addEventListener('abort', abortHandler);
+  }
+
+  buildCacheKey(signal?: AbortSignal): string {
+    return `${this.id}_${signal?.aborted}`;
+  }
+
 
   /**
    * Spawns and manages a child process to execute a given command, with handling for an optional AbortSignal.
@@ -33,7 +63,55 @@ export class PredictedProcess {
    * ```
    */
   public async run(signal?: AbortSignal): Promise<void> {
-    // TODO: Implement this.
+    if (signal?.aborted) {
+      return this.handleAbortedSignal();
+    }
+  
+    const cacheKey = this.buildCacheKey(signal);
+    if (cacheKey in this.memoizedCache) {
+      return;
+    }
+  
+    const promiseToSend = new Promise<void>((resolve, reject) => {
+      function closeHandler(event: any) {
+        if (event !== EXIT_CODE || !child) {
+          return;
+        }
+  
+        child.kill();
+        child.removeAllListeners();
+  
+        return resolve();
+      };
+  
+      function abortHandler(event: any) {
+        return reject(
+          new DOMException('Signal already aborted', 'AbortError')
+        );
+      };
+  
+      function errorHandler(error: any) {
+        return reject(error);
+      };
+  
+      const child = spawn(this.command);
+      child.on('close', closeHandler);
+      child.on('error', errorHandler);
+  
+      this.handleAbortedSignalTriggeredDuringExecution({
+        signal,
+        abortHandler,
+      });
+    }) as Promise<void>;
+  
+    this.memoizedCache[cacheKey] = this;
+  
+    try {
+      await promiseToSend;
+    } catch (error: any) {
+      delete this.memoizedCache[cacheKey];
+      throw new error;
+    }
   }
 
   /**
@@ -65,7 +143,13 @@ export class PredictedProcess {
    * ```
    */
   public memoize(): PredictedProcess {
-    // TODO: Implement this.
-    return this;
+    const cacheKey = `${this.id}_undefined`; // cacheKey is ID + signal.aborted
+
+    if (cacheKey in this.memoizedCache) {
+      return this.memoizedCache[cacheKey]
+    }
+
+    this.memoizedCache[cacheKey] = this;
+    return this.memoizedCache[cacheKey];
   }
 }
